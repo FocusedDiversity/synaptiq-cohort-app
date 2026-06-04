@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.python-version
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Data / synthetic EHR output (do not commit PHI or large generated data)
+data/
+*.csv
+*.parquet
+*.ndjson
+*.json.gz
+synthea_output/
+
+# Databricks / secrets
+.databrickscfg
+.env
+*.local
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
