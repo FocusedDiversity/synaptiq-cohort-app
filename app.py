@@ -16,10 +16,11 @@ import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
 
-load_dotenv()   # load .env when running locally
+load_dotenv()
 
 import config
 from db import run_query
+from ui import inject_css, brand_header, sidebar_nav
 
 # ---------------------------------------------------------------
 # Page config (must be first Streamlit call)
@@ -30,31 +31,15 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+inject_css()
+sidebar_nav()
+brand_header("Cohort Builder")
 
-# ---------------------------------------------------------------
-# Sidebar
-# ---------------------------------------------------------------
-with st.sidebar:
-    st.markdown(f"## {config.APP_ICON} {config.APP_TITLE}")
-    st.caption(config.APP_VERSION)
-    st.divider()
-    st.page_link("app.py",                               label="🏠 Home",             icon=None)
-    st.page_link("pages/01_cohort_builder.py",           label="🔬 Cohort Builder",   icon=None)
-    st.page_link("pages/02_cohort_review.py",            label="📋 My Cohorts",       icon=None)
-    st.page_link("pages/03_patient_explorer.py",         label="🧑‍⚕️ Patient Explorer", icon=None)
-    st.divider()
-    st.caption(
-        f"**Silver:** `{config.CATALOG}.{config.SILVER_SCHEMA}`\n\n"
-        f"**Gold:** `{config.CATALOG}.{config.GOLD_SCHEMA}`"
-    )
-
-# ---------------------------------------------------------------
-# Home dashboard
-# ---------------------------------------------------------------
-st.title(f"{config.APP_ICON} {config.APP_TITLE}")
 st.markdown(
-    "Build patient cohorts using structured criteria, natural-language queries, "
-    "or NLP-derived clinical findings from free-text notes."
+    "<p style='color:#6B8EAD;margin-top:-0.5rem;margin-bottom:0.8rem;'>"
+    "Build patient cohorts using structured criteria, NLP-derived findings from "
+    "clinical notes, or natural-language queries.</p>",
+    unsafe_allow_html=True,
 )
 st.divider()
 

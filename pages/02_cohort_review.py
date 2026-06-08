@@ -9,23 +9,16 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 from db import run_query, execute
+from ui import inject_css, brand_header, sidebar_nav
 
 st.set_page_config(
     page_title=f"My Cohorts — {config.APP_TITLE}",
     page_icon="📋",
     layout="wide",
 )
-
-with st.sidebar:
-    st.markdown(f"## {config.APP_ICON} {config.APP_TITLE}")
-    st.caption(config.APP_VERSION)
-    st.divider()
-    st.page_link("app.py",                       label="🏠 Home")
-    st.page_link("pages/01_cohort_builder.py",   label="🔬 Cohort Builder")
-    st.page_link("pages/02_cohort_review.py",    label="📋 My Cohorts")
-    st.page_link("pages/03_patient_explorer.py", label="🧑‍⚕️ Patient Explorer")
-
-st.title("📋 My Cohorts")
+inject_css()
+sidebar_nav()
+brand_header("My Cohorts")
 
 # ---------------------------------------------------------------
 # Cohort list with filters

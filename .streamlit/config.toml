@@ -1,0 +1,7 @@
+[theme]
+# Synaptiq brand palette
+primaryColor             = "#C8956A"   # Synaptiq amber — buttons, links, active tabs
+backgroundColor          = "#FFFFFF"   # Main canvas
+secondaryBackgroundColor = "#EEF3F8"   # Sidebar + expanders — blue-grey tint
+textColor                = "#2D3748"   # Dark charcoal
+font                     = "sans serif"
