@@ -71,6 +71,16 @@ A **Databricks App** (Streamlit UI + Unity Catalog backend) that lets clinicians
 
 ```
 .
+├── app.yaml                      Databricks Apps run command
+├── app.py                        Home dashboard
+├── config.py                     Schema/table constants
+├── db.py                         Connection manager (SP OAuth)
+├── requirements.txt
+├── pages/
+│   ├── 01_cohort_builder.py      Cohort definition + preview + save
+│   ├── 02_cohort_review.py       Browse cohorts, member list, CSV export
+│   └── 03_patient_explorer.py    MRN search, timeline, note viewer
+│
 ├── ddl/                          SQL DDL — run once to create schemas + tables
 │   ├── 01_catalog_and_schemas.sql
 │   ├── 03_silver_clinical_model.sql   clinical tables (patient → clinical_note)
@@ -79,17 +89,6 @@ A **Databricks App** (Streamlit UI + Unity Catalog backend) that lets clinicians
 │
 ├── generate_ehr_silver.py        Databricks notebook — synthetic data generator
 ├── sample_clinical_notes.py      Databricks notebook — clinical note template library
-│
-├── app/                          Streamlit app (deploys as a Databricks App)
-│   ├── app.yaml                  Databricks Apps run command
-│   ├── app.py                    Home dashboard
-│   ├── config.py                 Schema/table constants
-│   ├── db.py                     Connection manager (SP OAuth or PAT)
-│   ├── requirements.txt
-│   └── pages/
-│       ├── 01_cohort_builder.py  Cohort definition + preview + save
-│       ├── 02_cohort_review.py   Browse cohorts, member list, CSV export
-│       └── 03_patient_explorer.py  MRN search, timeline, note viewer
 │
 └── docs/
     ├── ehr-generic-data-model.md  Full data model design reference

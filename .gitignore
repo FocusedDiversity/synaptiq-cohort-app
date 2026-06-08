@@ -27,3 +27,5 @@ synthea_output/
 .idea/
 .DS_Store
 Thumbs.db
+
+.databricks

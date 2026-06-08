@@ -1,0 +1,55 @@
+# Databricks Asset Bundle — Synaptiq Cohort Builder
+# See https://docs.databricks.com/dev-tools/bundles/index.html
+
+bundle:
+  name: Synatpq-cohort-app
+
+variables:
+  http_path:
+    description: SQL warehouse HTTP path (e.g. /sql/1.0/warehouses/abcdef123456)
+    default: ""
+  sp_client_id:
+    description: Service Principal application (client) ID
+    default: ""
+  sp_client_secret:
+    description: Service Principal client secret
+    default: ""
+
+resources:
+  apps:
+    cohort-builder:
+      name: cohort-builder
+      description: "AI-powered patient cohort identification — Synaptiq POC"
+      source_code_path: .
+
+      # Environment variables injected at runtime.
+      # DATABRICKS_HOST is automatically injected by the Apps runtime — do not set it here.
+      config:
+        env:
+          - name: DATABRICKS_HTTP_PATH
+            value: ${var.http_path}
+          - name: DATABRICKS_CLIENT_ID
+            value: ${var.sp_client_id}
+          - name: DATABRICKS_CLIENT_SECRET
+            value: ${var.sp_client_secret}
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-7405619521761591.11.azuredatabricks.net
+      # workspace_id is the numeric ID in the host URL — required for Apps provisioning
+      workspace_id: "7405619521761591"
+      profile: gfischer
+    variables:
+      http_path: ""       # fill in before deploying
+      sp_client_id: ""
+      sp_client_secret: ""
+
+  # prod:
+  #   workspace:
+  #     host: https://adb-7405619521761591.11.azuredatabricks.net
+  #   variables:
+  #     http_path: "/sql/1.0/warehouses/YOUR_WAREHOUSE_ID"
+  #     # Use SP credentials instead of token in prod
