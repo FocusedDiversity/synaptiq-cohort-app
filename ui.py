@@ -59,6 +59,11 @@ _CSS = """
     text-transform: uppercase;
 }
 
+/* ── Hide Streamlit's auto-generated page nav (we use our own) ─────────── */
+[data-testid="stSidebarNav"] {
+    display: none;
+}
+
 /* ── Sidebar ───────────────────────────────────────────────────────────── */
 section[data-testid="stSidebar"] {
     background: linear-gradient(180deg, #8BA4BD 0%, #7A96B0 100%);
@@ -89,6 +94,12 @@ section[data-testid="stSidebar"] button:hover {
 section[data-testid="stSidebar"] button p,
 section[data-testid="stSidebar"] button span {
     color: #FFFFFF !important;
+}
+/* code tags in sidebar get a white bg by default — override it */
+section[data-testid="stSidebar"] code {
+    background: rgba(255,255,255,0.15) !important;
+    color: #FFFFFF !important;
+    border: none !important;
 }
 
 /* ── Tabs ──────────────────────────────────────────────────────────────── */
