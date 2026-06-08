@@ -133,11 +133,11 @@ with tab_structured:
         date_col1, date_col2 = st.columns(2)
         date_from = date_col1.date_input(
             "Criteria from",
-            value=datetime.date(2022, 1, 1),
+            value=datetime.date(2025, 1, 1),
         )
         date_to = date_col2.date_input(
             "Criteria to",
-            value=datetime.date.today(),
+            value=datetime.date(2026, 12, 31),
         )
 
         st.markdown("**Demographics**")
@@ -148,6 +148,12 @@ with tab_structured:
 
 # ---------- NLP tab ----------
 with tab_nlp:
+    st.info(
+        "**NLP pipeline required.** The `note_nlp_entity` table is populated by running the NLP "
+        "extraction pipeline over `clinical_note`. Until that runs, NLP-derived criteria will "
+        "return 0 patients. Use the **Structured** tab in the meantime.",
+        icon="⚠️",
+    )
     st.markdown(
         "Include patients whose clinical notes contain **positively-asserted, current-patient** "
         "mentions of a concept — filtering out negated, historical, and family-history mentions."
@@ -335,6 +341,10 @@ if preview_btn or save_btn:
 
         st.metric("Patients matching criteria", f"{n:,}")
 
+        # Always show SQL — essential for debugging zero-result queries
+        with st.expander("View generated SQL", expanded=(n == 0)):
+            st.code(inclusion_sql.strip(), language="sql")
+
         if n > 0:
             with st.spinner("Loading preview sample…"):
                 sample_df = run_query(f"{inclusion_sql} LIMIT {config.PAGE_SIZE}")
@@ -350,11 +360,6 @@ if preview_btn or save_btn:
                     "race":       st.column_config.TextColumn("Race"),
                 },
             )
-
-            # Show generated SQL for transparency
-            with st.expander("View generated SQL"):
-                st.code(inclusion_sql.strip(), language="sql")
-
         else:
             st.warning("No patients match the current criteria. Try broadening the filters.")
 
