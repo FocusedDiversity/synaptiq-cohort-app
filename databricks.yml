@@ -43,7 +43,7 @@ targets:
       workspace_id: "7405619521761591"
       profile: gfischer
     variables:
-      http_path: ""       # fill in before deploying
+      http_path: "/sql/1.0/warehouses/7c48969bf427f0dd"
       sp_client_id: ""
       sp_client_secret: ""
 
