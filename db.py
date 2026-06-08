@@ -1,9 +1,9 @@
 """
 Database connection manager.
 
-Inside Databricks Apps the SDK picks up ambient credentials automatically —
-no token or service principal config needed. Only DATABRICKS_HTTP_PATH
-must be set as an App environment variable.
+Inside Databricks Apps, DATABRICKS_HOST and DATABRICKS_TOKEN are injected
+automatically by the runtime. Only DATABRICKS_HTTP_PATH needs to be set
+in app.yaml (already configured).
 
 For local dev, create a .env file from .env.example.
 """
@@ -14,27 +14,29 @@ import os
 import pandas as pd
 import streamlit as st
 from databricks import sql
-from databricks.sdk.config import Config
-
 from dotenv import load_dotenv
+
 load_dotenv()
 
 
 @st.cache_resource(show_spinner="Connecting to Databricks…")
 def _connection():
+    host      = os.getenv("DATABRICKS_HOST")
     http_path = os.getenv("DATABRICKS_HTTP_PATH")
-    if not http_path:
-        raise RuntimeError(
-            "DATABRICKS_HTTP_PATH is not set.\n"
-            "Add it as an environment variable in the Databricks App configuration."
-        )
+    token     = os.getenv("DATABRICKS_TOKEN")
 
-    cfg = Config()  # picks up ambient Databricks Apps token, or local env/.databrickscfg
+    if not host or not http_path or not token:
+        missing = [k for k, v in {
+            "DATABRICKS_HOST": host,
+            "DATABRICKS_HTTP_PATH": http_path,
+            "DATABRICKS_TOKEN": token,
+        }.items() if not v]
+        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
 
     return sql.connect(
-        server_hostname=cfg.host,
+        server_hostname=host,
         http_path=http_path,
-        credentials_provider=cfg.authenticate,
+        access_token=token,
     )
 
 

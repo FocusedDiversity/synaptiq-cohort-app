@@ -92,9 +92,9 @@ except Exception as e:
     )
     st.info(
         "**Getting started:**  \n"
-        "1. Copy `app/.env.example` → `app/.env`  \n"
-        "2. Fill in `DATABRICKS_HOST`, `DATABRICKS_HTTP_PATH`, and your token or SP credentials  \n"
-        "3. Restart the app",
+        "1. Copy `.env.example` → `.env` and fill in credentials (local dev)  \n"
+        "2. Or set `DATABRICKS_HTTP_PATH` in app.yaml (Databricks Apps — already configured)  \n"
+        "3. `DATABRICKS_HOST` and `DATABRICKS_TOKEN` are injected automatically at runtime",
         icon="ℹ️",
     )
 
