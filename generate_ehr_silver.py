@@ -59,8 +59,8 @@ SILVER_SCHEMA = "test_silver_ehr_clinical"
 N_PATIENTS = 500          # change to 5000 for full POC run
 SEED       = 42           # master seed — change to generate a different population
 
-DATE_START = datetime.date(2022, 1, 1)
-DATE_END   = datetime.date(2024, 12, 31)
+DATE_START = datetime.date(2025, 1, 1)
+DATE_END   = datetime.date(2026, 12, 31)
 
 # Phenotype mix (must sum to 1.0)
 PHENOTYPE_DIST = {
