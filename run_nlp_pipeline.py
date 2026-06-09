@@ -50,19 +50,16 @@ SECRET_KEY   = "anthropic_api_key"
 
 # COMMAND ----------
 
+# MAGIC %pip install --upgrade typing_extensions anthropic -q
+
+# COMMAND ----------
+
+import anthropic
 import json
 import time
 import traceback
 import pandas as pd
 from pyspark.sql import functions as F
-
-# Install anthropic if not already present on the cluster
-try:
-    import anthropic
-except ImportError:
-    import subprocess, sys
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "anthropic", "-q"])
-    import anthropic
 
 # Retrieve API key from Databricks Secrets
 api_key = dbutils.secrets.get(scope=SECRET_SCOPE, key=SECRET_KEY)
