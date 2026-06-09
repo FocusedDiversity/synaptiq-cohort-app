@@ -156,8 +156,9 @@ def extract_entities(note_text: str, note_category: str) -> list[dict]:
             if raw.startswith("json"):
                 raw = raw[4:]
         return json.loads(raw)
-    except json.JSONDecodeError:
-        print(f"  [WARN] JSON parse failed, skipping note")
+    except json.JSONDecodeError as je:
+        print(f"  [WARN] JSON parse failed: {je}")
+        print(f"  [DEBUG] raw response (first 500 chars): {repr(raw[:500])}")
         return []
     except anthropic.RateLimitError:
         print("  [WARN] Rate limit hit — sleeping 30s")
