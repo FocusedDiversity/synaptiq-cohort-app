@@ -155,11 +155,11 @@ ENTITY_SCHEMA = {
                 "properties": {
                     "entity_type":     {"type": "string", "enum": ["problem", "medication", "procedure", "lab", "anatomy", "finding"]},
                     "covered_text":    {"type": "string"},
-                    "span_start":      {"type": ["integer", "null"]},
-                    "span_end":        {"type": ["integer", "null"]},
-                    "concept_code":    {"type": ["string", "null"]},
-                    "concept_system":  {"type": ["string", "null"], "enum": ["ICD-10-CM", "RxNorm", "LOINC", "SNOMED-CT", "CPT", None]},
-                    "concept_display": {"type": ["string", "null"]},
+                    "span_start":      {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+                    "span_end":        {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+                    "concept_code":    {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "concept_system":  {"anyOf": [{"type": "string", "enum": ["ICD-10-CM", "RxNorm", "LOINC", "SNOMED-CT", "CPT"]}, {"type": "null"}]},
+                    "concept_display": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                     "negation":        {"type": "boolean"},
                     "certainty":       {"type": "string", "enum": ["positive", "uncertain", "hypothetical", "negated"]},
                     "temporality":     {"type": "string", "enum": ["current", "historical", "family"]},
@@ -210,7 +210,7 @@ def extract_entities(note_text: str, note_category: str) -> list[dict] | None:
         time.sleep(30)
         return extract_entities(note_text, note_category)  # one retry
     except Exception as e:
-        print(f"  [ERROR] {e}")
+        print(f"  [ERROR] {type(e).__name__}: {e}")
         return None
 
 
@@ -269,9 +269,10 @@ ENTITY_SPARK_SCHEMA = T.StructType([
     T.StructField("confidence",      T.DoubleType()),
 ])
 
-all_entities = []
-processed    = 0
-errors       = 0
+all_entities  = []
+processed     = 0
+errors        = 0
+total_written = 0
 
 for idx, row in notes.iterrows():
     note_sk      = int(row["note_sk"])
@@ -321,12 +322,22 @@ for idx, row in notes.iterrows():
         batch_df.write.format("delta").mode("append").saveAsTable(
             f"{CATALOG}.{SILVER_SCHEMA}.note_nlp_entity"
         )
+        total_written += len(all_entities)
         print(f"  Wrote {len(all_entities):>4} entities | notes processed: {processed:>5}/{len(notes)}")
         all_entities = []
 
     time.sleep(SLEEP_BETWEEN_S)
 
-print(f"\nDone. {processed} notes processed, {errors} errors.")
+print(f"\nDone. {processed} notes processed, {errors} errors, {total_written} entities written.")
+
+# Fail LOUDLY if extraction failed across the board — a per-note error is
+# tolerable (it retries next run), but 100% failure means something systemic
+# (bad schema, auth, SDK mismatch) and should not look like a clean run.
+if processed > 0 and errors == processed:
+    raise RuntimeError(
+        f"All {processed} notes failed extraction — nothing written to "
+        f"note_nlp_entity. Check the [ERROR] lines above for the root cause."
+    )
 
 # COMMAND ----------
 
