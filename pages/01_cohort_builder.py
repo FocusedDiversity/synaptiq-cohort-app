@@ -139,34 +139,53 @@ with tab_structured:
 
 # ---------- NLP tab ----------
 with tab_nlp:
-    st.info(
-        "**NLP pipeline required.** The `note_nlp_entity` table is populated by running the NLP "
-        "extraction pipeline over `clinical_note`. Until that runs, NLP-derived criteria will "
-        "return 0 patients. Use the **Structured** tab in the meantime.",
-        icon="⚠️",
-    )
     st.markdown(
-        "Include patients whose clinical notes contain **positively-asserted, current-patient** "
-        "mentions of a concept — filtering out negated, historical, and family-history mentions."
+        "Include patients whose clinical notes contain **positively-asserted** mentions of a "
+        "concept — filtering out negated, historical, and family-history mentions. "
+        "Search by clinical **term** (matches the extracted note text and the normalized "
+        "concept name), by standardized **code**, or both."
+    )
+    nlp_terms = st.text_input(
+        "Search terms (comma-separated — a patient qualifies if ANY term matches)",
+        placeholder="upper respiratory, cough, shortness of breath",
+        help="Case-insensitive substring match against the verbatim note text span "
+             "(covered_text) and the normalized concept name (concept_display).",
     )
     nlp_concept = st.text_input(
-        "Concept code (SNOMED / ICD-10 / RxNorm / LOINC)",
+        "Concept code — optional (SNOMED / ICD-10 / RxNorm / LOINC)",
         placeholder="E11.9  or  860975  or  73211009 (SNOMED T2DM)",
+        help="Exact code match, OR'd together with the search terms above.",
     )
-    nlp_certainty = st.multiselect(
-        "Certainty filter",
-        ["positive", "uncertain", "hypothetical"],
-        default=["positive"],
-        help="'positive' = confirmed mention. Exclude 'negated' automatically.",
-    )
-    nlp_temporality = st.multiselect(
-        "Temporality filter",
-        ["current", "historical", "family"],
-        default=["current"],
-    )
+    nlp_filter_col1, nlp_filter_col2 = st.columns(2)
+    with nlp_filter_col1:
+        nlp_certainty = st.multiselect(
+            "Certainty filter",
+            ["positive", "uncertain", "hypothetical"],
+            default=["positive"],
+            help="'positive' = confirmed mention. Negated mentions are always excluded.",
+        )
+        nlp_entity_types = st.multiselect(
+            "Entity types (empty = all)",
+            ["problem", "medication", "procedure", "lab", "anatomy", "finding"],
+            default=[],
+            help="Restrict matches to certain entity types, e.g. only problems/findings "
+                 "so a term like 'cough' can't match a medication name.",
+        )
+    with nlp_filter_col2:
+        nlp_temporality = st.multiselect(
+            "Temporality filter",
+            ["current", "historical", "family"],
+            default=["current"],
+        )
+        nlp_patient_only = st.checkbox(
+            "Patient mentions only",
+            value=True,
+            help="Exclude mentions attributed to a family member or another person "
+                 "(e.g. \"mother has Type 2 diabetes\").",
+        )
     st.caption(
-        "Queries `dev.test_silver_ehr_clinical.note_nlp_entity` where "
-        "`negation = false` and filters by certainty + temporality."
+        "Queries `dev.test_silver_ehr_clinical.note_nlp_entity` where `negation = false`, "
+        "filtered by certainty, temporality, entity type, and subject."
     )
 
 # ---------- Natural Language tab ----------
@@ -261,18 +280,36 @@ def build_inclusion_sql() -> str:
                 AND    effective_datetime BETWEEN '{date_from}' AND '{date_to}'
             )""")
 
-    # NLP entities
+    # NLP entities — term search (covered_text / concept_display) and/or exact code
+    nlp_match_clauses = []
+    if nlp_terms.strip():
+        for term in [t.strip() for t in nlp_terms.split(",") if t.strip()]:
+            safe_term = term.replace("'", "''")
+            nlp_match_clauses.append(
+                f"(covered_text ILIKE '%{safe_term}%' OR concept_display ILIKE '%{safe_term}%')"
+            )
     if nlp_concept.strip():
+        safe_code = nlp_concept.strip().replace("'", "''")
+        nlp_match_clauses.append(f"concept_code = '{safe_code}'")
+
+    if nlp_match_clauses:
+        match_sql  = "\n                    OR ".join(nlp_match_clauses)
         cert_list  = ", ".join(f"'{c}'" for c in nlp_certainty)  if nlp_certainty  else "'positive'"
         temp_list  = ", ".join(f"'{t}'" for t in nlp_temporality) if nlp_temporality else "'current'"
+        extra = ""
+        if nlp_entity_types:
+            type_list = ", ".join(f"'{t}'" for t in nlp_entity_types)
+            extra += f"\n                AND    entity_type IN ({type_list})"
+        if nlp_patient_only:
+            extra += "\n                AND    subject = 'patient'"
         parts.append(f"""
             patient_sk IN (
                 SELECT DISTINCT patient_sk
                 FROM   {config.T_NLP_ENTITY}
-                WHERE  concept_code = '{nlp_concept.strip()}'
+                WHERE  ( {match_sql} )
                 AND    negation = false
                 AND    certainty IN ({cert_list})
-                AND    temporality IN ({temp_list})
+                AND    temporality IN ({temp_list}){extra}
             )""")
 
     # Demographics — age
@@ -356,32 +393,40 @@ if preview_btn or save_btn:
 
         # ---- Save ----
         if save_btn and cohort_name.strip() and n > 0:
+            nlp_used        = bool(nlp_terms.strip() or nlp_concept.strip())
+            structured_used = bool(icd_codes.strip() or med_codes.strip() or lab_code.strip())
+
             logic_json = json.dumps({
-                "icd_codes":       icd_codes,
-                "icd_status":      icd_status,
-                "med_codes":       med_codes,
-                "med_status":      med_status,
-                "lab_code":        lab_code,
-                "lab_min":         lab_min,
-                "lab_max":         lab_max,
-                "nlp_concept":     nlp_concept,
-                "nlp_certainty":   nlp_certainty,
-                "nlp_temporality": nlp_temporality,
-                "exc_icd":         exc_icd,
-                "exc_meds":        exc_meds,
-                "date_from":       str(date_from),
-                "date_to":         str(date_to),
-                "min_age":         min_age,
-                "max_age":         max_age,
-                "sex_filter":      sex_filter,
+                "icd_codes":        icd_codes,
+                "icd_status":       icd_status,
+                "med_codes":        med_codes,
+                "med_status":       med_status,
+                "lab_code":         lab_code,
+                "lab_min":          lab_min,
+                "lab_max":          lab_max,
+                "nlp_terms":        nlp_terms,
+                "nlp_concept":      nlp_concept,
+                "nlp_certainty":    nlp_certainty,
+                "nlp_temporality":  nlp_temporality,
+                "nlp_entity_types": nlp_entity_types,
+                "nlp_patient_only": nlp_patient_only,
+                "exc_icd":          exc_icd,
+                "exc_meds":         exc_meds,
+                "date_from":        str(date_from),
+                "date_to":          str(date_to),
+                "min_age":          min_age,
+                "max_age":          max_age,
+                "sex_filter":       sex_filter,
             })
 
             primary_code   = (icd_codes.split(",")[0].strip() if icd_codes.strip()
                               else med_codes.split(",")[0].strip() if med_codes.strip()
-                              else nlp_concept.strip())
+                              else nlp_concept.strip()
+                              or (nlp_terms.split(",")[0].strip() if nlp_terms.strip() else ""))
             primary_system = ("ICD-10-CM" if icd_codes.strip()
                               else "RxNorm" if med_codes.strip()
-                              else "SNOMED")
+                              else "SNOMED" if nlp_concept.strip()
+                              else "NLP-term")
 
             # Insert cohort definition
             safe_name  = cohort_name.replace("'", "''")
@@ -399,7 +444,7 @@ if preview_btn or save_btn:
                 VALUES (
                     '{safe_name}', '{safe_desc}', '{cohort_type}', '{cohort_category}',
                     '{primary_code}', '{primary_system}',
-                    '{safe_logic}', {'true' if nlp_concept.strip() else 'false'},
+                    '{safe_logic}', {'true' if nlp_used else 'false'},
                     'Structured criteria — see definition_logic',
                     {min_age}, {max_age},
                     'active', 1, '{safe_by}'
@@ -415,10 +460,13 @@ if preview_btn or save_btn:
             cohort_sk = int(new_cohort.iloc[0]["cohort_sk"])
 
             # Insert cohort members
+            qual_source = ("nlp" if nlp_used and not structured_used
+                           else "mixed" if nlp_used
+                           else "coded")
             members_df = run_query(inclusion_sql)
             if not members_df.empty:
                 member_values = ", ".join(
-                    f"({cohort_sk}, {int(row['patient_sk'])}, CURRENT_DATE(), 'coded', CURRENT_TIMESTAMP())"
+                    f"({cohort_sk}, {int(row['patient_sk'])}, CURRENT_DATE(), '{qual_source}', CURRENT_TIMESTAMP())"
                     for _, row in members_df.iterrows()
                 )
                 execute(f"""
