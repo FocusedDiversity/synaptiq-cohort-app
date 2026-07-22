@@ -53,9 +53,8 @@ MAX_TOKENS    = 16000       # max tokens in Claude response per note
                             # (2048 truncated entity-rich notes → invalid JSON)
 
 # ── Pipeline knobs ─────────────────────────────────────────────────────────
-BATCH_SIZE        = 50      # notes per Delta write batch
 MAX_NOTES         = None    # set to an int (e.g. 100) to limit for testing; None = all
-SLEEP_BETWEEN_S   = 0.3     # seconds between API calls (rate-limit safety margin)
+POLL_EVERY_S      = 30      # seconds between batch status checks
 
 # ── Databricks secret scope / key for Anthropic API key ───────────────────
 SECRET_SCOPE = "synaptiq"
@@ -80,7 +79,6 @@ client  = anthropic.Anthropic(api_key=api_key)
 
 print(f"Anthropic SDK version : {anthropic.__version__}")
 print(f"Model                 : {MODEL_NAME}")
-print(f"Batch size            : {BATCH_SIZE}")
 print(f"Max notes             : {MAX_NOTES or 'all unprocessed'}")
 
 # COMMAND ----------
@@ -178,39 +176,27 @@ ENTITY_SCHEMA = {
 }
 
 
-def extract_entities(note_text: str, note_category: str) -> list[dict] | None:
-    """Call Claude and return a list of entity dicts, or None on failure.
+def build_user_msg(note_text: str, note_category: str) -> str:
+    return f"NOTE CATEGORY: {note_category}\n\nNOTE TEXT:\n{note_text}"
+
+
+def parse_entities(message) -> list[dict] | None:
+    """Parse a completed API message into a list of entity dicts, or None on failure.
 
     None (failure) vs [] (genuinely no entities) matters: failed notes write no
     rows, so the resume-safe NOT IN query picks them up again on the next run.
     """
-    user_msg = f"NOTE CATEGORY: {note_category}\n\nNOTE TEXT:\n{note_text}"
-    try:
-        response = client.messages.create(
-            model=MODEL_NAME,
-            max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            output_config={"format": {"type": "json_schema", "schema": ENTITY_SCHEMA}},
-            messages=[{"role": "user", "content": user_msg}],
-        )
-        if response.stop_reason == "max_tokens":
-            print(f"  [WARN] response truncated at {MAX_TOKENS} tokens — skipping note")
-            return None
-        if response.stop_reason == "refusal":
-            print("  [WARN] model declined this note — skipping")
-            return None
-        raw = next((b.text for b in response.content if b.type == "text"), "")
-        return json.loads(raw)["entities"]
-    except json.JSONDecodeError as je:
-        print(f"  [WARN] JSON parse failed: {je}")
-        print(f"  [DEBUG] raw response (first 500 chars): {repr(raw[:500])}")
+    if message.stop_reason == "max_tokens":
+        print(f"  [WARN] response truncated at {MAX_TOKENS} tokens — skipping note")
         return None
-    except anthropic.RateLimitError:
-        print("  [WARN] Rate limit hit — sleeping 30s")
-        time.sleep(30)
-        return extract_entities(note_text, note_category)  # one retry
+    if message.stop_reason == "refusal":
+        print("  [WARN] model declined this note — skipping")
+        return None
+    try:
+        raw = next((b.text for b in message.content if b.type == "text"), "")
+        return json.loads(raw)["entities"]
     except Exception as e:
-        print(f"  [ERROR] {type(e).__name__}: {e}")
+        print(f"  [WARN] parse failed: {type(e).__name__}: {e}")
         return None
 
 
@@ -242,7 +228,71 @@ print(f"nlp_run_sk = {nlp_run_sk}")
 
 # COMMAND ----------
 
-# MAGIC %md ## Section 6 — Extract entities and write in batches
+# MAGIC %md ## Section 6 — Submit extraction batch
+# MAGIC
+# MAGIC Uses the **Message Batches API**: all notes are submitted at once, processed in
+# MAGIC parallel on Anthropic's side, at **50% of standard token pricing**. The sequential
+# MAGIC one-call-per-note loop took ~11 s/note (~7 h for 2,364 notes); a batch typically
+# MAGIC completes in minutes and never ties up this cluster per-note.
+# MAGIC
+# MAGIC Safe to interrupt: the batch keeps processing server-side and results stay
+# MAGIC retrievable for 29 days (the batch id is printed below). Notes never written
+# MAGIC to `note_nlp_entity` are simply re-submitted on the next run.
+
+# COMMAND ----------
+
+from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+from anthropic.types.messages.batch_create_params import Request
+
+note_lookup = {}    # note_sk -> (patient_sk, encounter_sk)
+requests    = []
+
+for idx, row in notes.iterrows():
+    note_sk = int(row["note_sk"])
+    note_lookup[note_sk] = (
+        int(row["patient_sk"]),
+        int(row["encounter_sk"]) if pd.notna(row["encounter_sk"]) else None,
+    )
+    requests.append(Request(
+        custom_id=f"note-{note_sk}",
+        params=MessageCreateParamsNonStreaming(
+            model=MODEL_NAME,
+            max_tokens=MAX_TOKENS,
+            system=SYSTEM_PROMPT,
+            output_config={"format": {"type": "json_schema", "schema": ENTITY_SCHEMA}},
+            messages=[{"role": "user",
+                       "content": build_user_msg(str(row["note_text"]),
+                                                 str(row["note_category"] or "unknown"))}],
+        ),
+    ))
+
+if requests:
+    batch = client.messages.batches.create(requests=requests)
+    print(f"Submitted batch {batch.id} with {len(requests):,} notes")
+    print(f"If interrupted, results remain retrievable for 29 days via this batch id.")
+else:
+    batch = None
+    print("No unprocessed notes — nothing to submit.")
+
+# COMMAND ----------
+
+# MAGIC %md ## Section 6b — Wait for batch to complete
+
+# COMMAND ----------
+
+if batch:
+    while True:
+        batch = client.messages.batches.retrieve(batch.id)
+        c = batch.request_counts
+        print(f"  {batch.processing_status:<12} | succeeded={c.succeeded:,} "
+              f"errored={c.errored:,} processing={c.processing:,}")
+        if batch.processing_status == "ended":
+            break
+        time.sleep(POLL_EVERY_S)
+
+# COMMAND ----------
+
+# MAGIC %md ## Section 6c — Parse results and write to Delta
 
 # COMMAND ----------
 
@@ -269,66 +319,59 @@ ENTITY_SPARK_SCHEMA = T.StructType([
     T.StructField("confidence",      T.DoubleType()),
 ])
 
-all_entities  = []
-processed     = 0
-errors        = 0
-total_written = 0
+all_entities = []
+processed    = 0
+errors       = 0
 
-for idx, row in notes.iterrows():
-    note_sk      = int(row["note_sk"])
-    patient_sk   = int(row["patient_sk"])
-    encounter_sk = int(row["encounter_sk"]) if pd.notna(row["encounter_sk"]) else None
-    note_text    = str(row["note_text"])
-    note_category= str(row["note_category"] or "unknown")
+if batch:
+    for result in client.messages.batches.results(batch.id):
+        note_sk = int(result.custom_id.split("-", 1)[1])
+        patient_sk, encounter_sk = note_lookup[note_sk]
+        processed += 1
 
-    entities = extract_entities(note_text, note_category)
-    if entities is None:
-        errors += 1
-        print(f"  [ERROR] note_sk={note_sk} failed — no rows written; will retry next run")
-        entities = []
+        entities = None
+        if result.result.type == "succeeded":
+            entities = parse_entities(result.result.message)
+        if entities is None:
+            errors += 1
+            print(f"  [ERROR] note_sk={note_sk}: result={result.result.type} — "
+                  f"no rows written; will retry next run")
+            continue
 
-    for ent in entities:
-        # Validate and normalise mandatory fields
-        certainty  = ent.get("certainty",  "positive")
-        negation   = bool(ent.get("negation", False))
-        # Keep certainty consistent with negation flag
-        if negation and certainty == "positive":
-            certainty = "negated"
+        for ent in entities:
+            # Validate and normalise mandatory fields
+            certainty = ent.get("certainty", "positive")
+            negation  = bool(ent.get("negation", False))
+            # Keep certainty consistent with negation flag
+            if negation and certainty == "positive":
+                certainty = "negated"
 
-        all_entities.append({
-            "note_sk":        note_sk,
-            "patient_sk":     patient_sk,
-            "encounter_sk":   encounter_sk,
-            "nlp_run_sk":     nlp_run_sk,
-            "entity_type":    ent.get("entity_type"),
-            "covered_text":   ent.get("covered_text"),
-            "span_start":     ent.get("span_start"),
-            "span_end":       ent.get("span_end"),
-            "concept_code":   ent.get("concept_code"),
-            "concept_system": ent.get("concept_system"),
-            "concept_display":ent.get("concept_display"),
-            "negation":       negation,
-            "certainty":      certainty,
-            "temporality":    ent.get("temporality", "current"),
-            "subject":        ent.get("subject", "patient"),
-            "confidence":     float(ent.get("confidence", 0.8)),
-        })
+            all_entities.append({
+                "note_sk":        note_sk,
+                "patient_sk":     patient_sk,
+                "encounter_sk":   encounter_sk,
+                "nlp_run_sk":     nlp_run_sk,
+                "entity_type":    ent.get("entity_type"),
+                "covered_text":   ent.get("covered_text"),
+                "span_start":     ent.get("span_start"),
+                "span_end":       ent.get("span_end"),
+                "concept_code":   ent.get("concept_code"),
+                "concept_system": ent.get("concept_system"),
+                "concept_display":ent.get("concept_display"),
+                "negation":       negation,
+                "certainty":      certainty,
+                "temporality":    ent.get("temporality", "current"),
+                "subject":        ent.get("subject", "patient"),
+                "confidence":     float(ent.get("confidence", 0.8)),
+            })
 
-    processed += 1
+if all_entities:
+    batch_df = spark.createDataFrame(all_entities, schema=ENTITY_SPARK_SCHEMA)
+    batch_df.write.format("delta").mode("append").saveAsTable(
+        f"{CATALOG}.{SILVER_SCHEMA}.note_nlp_entity"
+    )
 
-    # Write batch to Delta
-    if len(all_entities) >= BATCH_SIZE or (processed == len(notes) and all_entities):
-        batch_df = spark.createDataFrame(all_entities, schema=ENTITY_SPARK_SCHEMA)
-        batch_df.write.format("delta").mode("append").saveAsTable(
-            f"{CATALOG}.{SILVER_SCHEMA}.note_nlp_entity"
-        )
-        total_written += len(all_entities)
-        print(f"  Wrote {len(all_entities):>4} entities | notes processed: {processed:>5}/{len(notes)}")
-        all_entities = []
-
-    time.sleep(SLEEP_BETWEEN_S)
-
-print(f"\nDone. {processed} notes processed, {errors} errors, {total_written} entities written.")
+print(f"\nDone. {processed} notes processed, {errors} errors, {len(all_entities)} entities written.")
 
 # Fail LOUDLY if extraction failed across the board — a per-note error is
 # tolerable (it retries next run), but 100% failure means something systemic
