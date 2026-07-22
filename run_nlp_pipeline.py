@@ -30,10 +30,11 @@ CATALOG       = "dev"
 SILVER_SCHEMA = "test_silver_ehr_clinical"
 
 # ── Claude model ───────────────────────────────────────────────────────────
-# claude-haiku-4-5-20251001  →  fastest / cheapest  (good for POC)
-# claude-sonnet-4-6          →  higher accuracy      (recommended for production)
-MODEL_NAME    = "claude-haiku-4-5-20251001"
-MAX_TOKENS    = 2048        # max tokens in Claude response per note
+# claude-haiku-4-5   →  fastest / cheapest  (good for POC)
+# claude-sonnet-5    →  higher accuracy      (recommended for production)
+MODEL_NAME    = "claude-haiku-4-5"
+MAX_TOKENS    = 16000       # max tokens in Claude response per note
+                            # (2048 truncated entity-rich notes → invalid JSON)
 
 # ── Pipeline knobs ─────────────────────────────────────────────────────────
 BATCH_SIZE        = 50      # notes per Delta write batch
@@ -111,62 +112,94 @@ print(f"Notes to process: {len(notes):,}")
 
 SYSTEM_PROMPT = """You are a clinical NLP system. Extract all clinically relevant entities from the note.
 
-For EACH entity return a JSON object with EXACTLY these keys:
-- entity_type     : one of "problem" | "medication" | "procedure" | "lab" | "anatomy" | "finding"
+Attribute semantics:
 - covered_text    : the exact text span from the note (verbatim)
-- span_start      : character offset where covered_text begins (integer)
-- span_end        : character offset where covered_text ends (integer)
+- span_start/end  : character offsets of covered_text in the note (null if unsure)
 - concept_code    : best-fit code (ICD-10-CM for problems, RxNorm for medications, LOINC for labs, SNOMED-CT for findings/anatomy, CPT for procedures). Use null if unknown.
-- concept_system  : "ICD-10-CM" | "RxNorm" | "LOINC" | "SNOMED-CT" | "CPT" | null
-- concept_display : canonical name for the concept
-- negation        : true if negated ("no diabetes", "denies", "ruled out"), false otherwise
-- certainty       : "positive" | "uncertain" | "hypothetical" | "negated"
-                    - positive    = confirmed, definite assertion
-                    - uncertain   = "possible", "rule out", "cannot exclude", "suspected"
-                    - hypothetical = "if this is X", "should X develop"
-                    - negated     = explicitly denied
-- temporality     : "current" | "historical" | "family"
-                    - current    = active or present condition/finding
-                    - historical = past history ("history of", "prior", "previous", "former")
-                    - family     = family member's condition ("mother has", "family history of")
-- subject         : "patient" | "family" | "other"
-                    - patient = pertains to the patient being documented
-                    - family  = pertains to a family member
-                    - other   = pertains to another person
+- negation        : true if negated ("no diabetes", "denies", "ruled out")
+- certainty       : positive    = confirmed, definite assertion
+                    uncertain   = "possible", "rule out", "cannot exclude", "suspected"
+                    hypothetical = "if this is X", "should X develop"
+                    negated     = explicitly denied
+- temporality     : current    = active or present condition/finding
+                    historical = past history ("history of", "prior", "previous", "former")
+                    family     = family member's condition ("mother has", "family history of")
+- subject         : patient = pertains to the patient being documented
+                    family  = pertains to a family member
+                    other   = pertains to another person
 - confidence      : your confidence score as a float 0.0–1.0
 
-Return ONLY a valid JSON array of entity objects. No prose, no markdown, no explanation.
-If no entities are found, return an empty array: []"""
+If no entities are found, return an empty entities array."""
+
+# JSON schema enforced via structured outputs — the API guarantees the response
+# text is valid JSON matching this shape, so no fence-stripping or repair needed.
+ENTITY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "entities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "entity_type":     {"type": "string", "enum": ["problem", "medication", "procedure", "lab", "anatomy", "finding"]},
+                    "covered_text":    {"type": "string"},
+                    "span_start":      {"type": ["integer", "null"]},
+                    "span_end":        {"type": ["integer", "null"]},
+                    "concept_code":    {"type": ["string", "null"]},
+                    "concept_system":  {"type": ["string", "null"], "enum": ["ICD-10-CM", "RxNorm", "LOINC", "SNOMED-CT", "CPT", None]},
+                    "concept_display": {"type": ["string", "null"]},
+                    "negation":        {"type": "boolean"},
+                    "certainty":       {"type": "string", "enum": ["positive", "uncertain", "hypothetical", "negated"]},
+                    "temporality":     {"type": "string", "enum": ["current", "historical", "family"]},
+                    "subject":         {"type": "string", "enum": ["patient", "family", "other"]},
+                    "confidence":      {"type": "number", "description": "Confidence score 0.0-1.0"},
+                },
+                "required": ["entity_type", "covered_text", "span_start", "span_end",
+                             "concept_code", "concept_system", "concept_display",
+                             "negation", "certainty", "temporality", "subject", "confidence"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["entities"],
+    "additionalProperties": False,
+}
 
 
-def extract_entities(note_text: str, note_category: str) -> list[dict]:
-    """Call Claude and return a list of entity dicts, or [] on failure."""
+def extract_entities(note_text: str, note_category: str) -> list[dict] | None:
+    """Call Claude and return a list of entity dicts, or None on failure.
+
+    None (failure) vs [] (genuinely no entities) matters: failed notes write no
+    rows, so the resume-safe NOT IN query picks them up again on the next run.
+    """
     user_msg = f"NOTE CATEGORY: {note_category}\n\nNOTE TEXT:\n{note_text}"
     try:
         response = client.messages.create(
             model=MODEL_NAME,
             max_tokens=MAX_TOKENS,
             system=SYSTEM_PROMPT,
+            output_config={"format": {"type": "json_schema", "schema": ENTITY_SCHEMA}},
             messages=[{"role": "user", "content": user_msg}],
         )
-        raw = response.content[0].text.strip()
-        # Strip accidental markdown fences
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        return json.loads(raw)
+        if response.stop_reason == "max_tokens":
+            print(f"  [WARN] response truncated at {MAX_TOKENS} tokens — skipping note")
+            return None
+        if response.stop_reason == "refusal":
+            print("  [WARN] model declined this note — skipping")
+            return None
+        raw = next((b.text for b in response.content if b.type == "text"), "")
+        return json.loads(raw)["entities"]
     except json.JSONDecodeError as je:
         print(f"  [WARN] JSON parse failed: {je}")
         print(f"  [DEBUG] raw response (first 500 chars): {repr(raw[:500])}")
-        return []
+        return None
     except anthropic.RateLimitError:
         print("  [WARN] Rate limit hit — sleeping 30s")
         time.sleep(30)
         return extract_entities(note_text, note_category)  # one retry
     except Exception as e:
         print(f"  [ERROR] {e}")
-        return []
+        return None
 
 
 # COMMAND ----------
@@ -181,7 +214,7 @@ spark.sql(f"""
     INSERT INTO {T_RUN} (model_name, model_version, run_started_at, note_count)
     VALUES (
         '{MODEL_NAME}',
-        '{anthropic.__version__}',
+        'anthropic-sdk-{anthropic.__version__}',
         CAST('{run_started_at.isoformat()}' AS TIMESTAMP),
         {len(notes)}
     )
@@ -201,6 +234,29 @@ print(f"nlp_run_sk = {nlp_run_sk}")
 
 # COMMAND ----------
 
+from pyspark.sql import types as T
+
+# Explicit write schema — pandas/Spark type inference chokes on None values
+# (e.g. a null encounter_sk becomes NaN and the column turns float).
+ENTITY_SPARK_SCHEMA = T.StructType([
+    T.StructField("note_sk",         T.LongType()),
+    T.StructField("patient_sk",      T.LongType()),
+    T.StructField("encounter_sk",    T.LongType()),
+    T.StructField("nlp_run_sk",      T.LongType()),
+    T.StructField("entity_type",     T.StringType()),
+    T.StructField("covered_text",    T.StringType()),
+    T.StructField("span_start",      T.IntegerType()),
+    T.StructField("span_end",        T.IntegerType()),
+    T.StructField("concept_code",    T.StringType()),
+    T.StructField("concept_system",  T.StringType()),
+    T.StructField("concept_display", T.StringType()),
+    T.StructField("negation",        T.BooleanType()),
+    T.StructField("certainty",       T.StringType()),
+    T.StructField("temporality",     T.StringType()),
+    T.StructField("subject",         T.StringType()),
+    T.StructField("confidence",      T.DoubleType()),
+])
+
 all_entities = []
 processed    = 0
 errors       = 0
@@ -208,11 +264,15 @@ errors       = 0
 for idx, row in notes.iterrows():
     note_sk      = int(row["note_sk"])
     patient_sk   = int(row["patient_sk"])
-    encounter_sk = int(row["encounter_sk"]) if row["encounter_sk"] is not None else None
+    encounter_sk = int(row["encounter_sk"]) if pd.notna(row["encounter_sk"]) else None
     note_text    = str(row["note_text"])
     note_category= str(row["note_category"] or "unknown")
 
     entities = extract_entities(note_text, note_category)
+    if entities is None:
+        errors += 1
+        print(f"  [ERROR] note_sk={note_sk} failed — no rows written; will retry next run")
+        entities = []
 
     for ent in entities:
         # Validate and normalise mandatory fields
@@ -245,7 +305,7 @@ for idx, row in notes.iterrows():
 
     # Write batch to Delta
     if len(all_entities) >= BATCH_SIZE or (processed == len(notes) and all_entities):
-        batch_df = spark.createDataFrame(pd.DataFrame(all_entities))
+        batch_df = spark.createDataFrame(all_entities, schema=ENTITY_SPARK_SCHEMA)
         batch_df.write.format("delta").mode("append").saveAsTable(
             f"{CATALOG}.{SILVER_SCHEMA}.note_nlp_entity"
         )
