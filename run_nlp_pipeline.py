@@ -29,7 +29,7 @@
 
 # Restart Python so the upgraded typing_extensions replaces the runtime's
 # preinstalled older copy. Without this, `import anthropic` fails with:
-#   TypeError: _TypedDictMeta.__new__() got an unexpected keyword argument 'extra_items'
+#   TypeError: _TypedDictMeta.__new__() got an unexpected keyword argument 'extra_items'.
 # NOTE: this wipes notebook state, which is why install+restart run BEFORE config.
 dbutils.library.restartPython()
 
