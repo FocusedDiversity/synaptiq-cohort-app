@@ -19,6 +19,22 @@
 
 # COMMAND ----------
 
+# MAGIC %md ## Section 0 — Install dependencies (must run first)
+
+# COMMAND ----------
+
+# MAGIC %pip install --upgrade "typing_extensions>=4.13" anthropic -q
+
+# COMMAND ----------
+
+# Restart Python so the upgraded typing_extensions replaces the runtime's
+# preinstalled older copy. Without this, `import anthropic` fails with:
+#   TypeError: _TypedDictMeta.__new__() got an unexpected keyword argument 'extra_items'
+# NOTE: this wipes notebook state, which is why install+restart run BEFORE config.
+dbutils.library.restartPython()
+
+# COMMAND ----------
+
 # MAGIC %md ## Section 1 — Configuration
 
 # COMMAND ----------
@@ -48,10 +64,6 @@ SECRET_KEY   = "anthropic_api_key"
 # COMMAND ----------
 
 # MAGIC %md ## Section 2 — Imports & API client
-
-# COMMAND ----------
-
-# MAGIC %pip install --upgrade typing_extensions anthropic -q
 
 # COMMAND ----------
 
