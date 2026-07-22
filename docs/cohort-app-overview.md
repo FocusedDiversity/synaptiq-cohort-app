@@ -31,7 +31,7 @@ Patient cohort identification touches nearly every function in a health system â
 | Cohort logic lives in one-off notebooks | Can't be re-used, versioned, or shared across analysts |
 | No standard vocabulary for cohort types | Control cohorts conflated with condition cohorts; study designs poorly documented |
 
-The Synaptiq Cohort Builder eliminates these through a point-and-click criteria builder, NLP-powered note mining, and a persistent gold-layer cohort repository in Unity Catalog.
+The Synaptiq Cohort Builder eliminates these through a point-and-click criteria builder, NLP-powered note mining, and a persistent gold-layer cohort repository in Databricks Unity Catalog.
 
 ---
 
